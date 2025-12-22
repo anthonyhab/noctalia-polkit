@@ -1,10 +1,11 @@
 #pragma once
 
-#include <QApplication>
-#include <QQmlApplicationEngine>
-#include <QQmlContext>
-#include <QQuickStyle>
-#include <QScreen>
+#include <QCoreApplication>
+#include <QJsonObject>
+#include <QLocalServer>
+#include <QLocalSocket>
+#include <QQueue>
+#include <QString>
 
 #include "PolkitListener.hpp"
 #include <polkitqt1-subject.h>
@@ -14,36 +15,37 @@ using namespace Hyprutils::Memory;
 #define SP CSharedPointer
 #define WP CWeakPointer
 
-class CQMLIntegration;
-
 class CAgent {
   public:
     CAgent();
     ~CAgent();
 
-    void submitResultThreadSafe(const std::string& result);
     void resetAuthState();
-    bool start();
+    bool start(QCoreApplication& app, const QString& socketPath);
     void initAuthPrompt();
+    void enqueueRequest();
+    void enqueueError(const QString& error);
+    void enqueueComplete(const QString& result);
+    bool handleRespond(const QString& cookie, const QString& password);
+    bool handleCancel(const QString& cookie);
 
   private:
     struct {
-        bool                   authing        = false;
-        QQmlApplicationEngine* qmlEngine      = nullptr;
-        CQMLIntegration*       qmlIntegration = nullptr;
+        bool authing = false;
     } authState;
-
-    struct {
-        std::string result;
-        bool        used = true;
-    } lastAuthResult;
 
     CPolkitListener                   listener;
     SP<PolkitQt1::UnixSessionSubject> sessionSubject;
 
-    bool                              resultReady();
+    QLocalServer*                     ipcServer = nullptr;
+    QQueue<QJsonObject>               eventQueue;
+    QString                           ipcSocketPath;
 
-    friend class CQMLIntegration;
+    void setupIpcServer();
+    void handleSocket(QLocalSocket* socket, const QByteArray& data);
+    void enqueueEvent(const QJsonObject& event);
+    QJsonObject buildRequestEvent() const;
+
     friend class CPolkitListener;
 };
 

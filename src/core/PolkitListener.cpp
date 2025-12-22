@@ -1,8 +1,5 @@
 #include <QDebug>
-#include <QInputDialog>
-
 #include "PolkitListener.hpp"
-#include "../QMLIntegration.hpp"
 #include "Agent.hpp"
 #include <polkitqt1-agent-session.h>
 
@@ -41,6 +38,11 @@ void CPolkitListener::initiateAuthentication(const QString& actionId, const QStr
     session.iconName     = iconName;
     session.gainedAuth   = false;
     session.cancelled    = false;
+    session.prompt       = "";
+    session.errorText    = "";
+    session.echoOn       = false;
+    session.requestSent  = false;
+    session.details      = details;
     session.inProgress   = true;
 
     g_pAgent->initAuthPrompt();
@@ -75,6 +77,15 @@ void CPolkitListener::cancelAuthentication() {
 
 void CPolkitListener::request(const QString& request, bool echo) {
     std::print("> PKS request: {} echo: {}\n", request.toStdString(), echo);
+    session.prompt  = request;
+    session.echoOn  = echo;
+
+    if (!session.requestSent) {
+        session.requestSent = true;
+        g_pAgent->enqueueRequest();
+    } else {
+        g_pAgent->enqueueRequest();
+    }
 }
 
 void CPolkitListener::completed(bool gainedAuthorization) {
@@ -82,8 +93,10 @@ void CPolkitListener::completed(bool gainedAuthorization) {
 
     session.gainedAuth = gainedAuthorization;
 
-    if (!gainedAuthorization && g_pAgent->authState.qmlIntegration)
-        g_pAgent->authState.qmlIntegration->setError("Authentication failed");
+    if (!gainedAuthorization) {
+        session.errorText = "Authentication failed";
+        g_pAgent->enqueueError(session.errorText);
+    }
 
     finishAuth();
 }
@@ -91,8 +104,8 @@ void CPolkitListener::completed(bool gainedAuthorization) {
 void CPolkitListener::showError(const QString& text) {
     std::print("> PKS showError: {}\n", text.toStdString());
 
-    if (g_pAgent->authState.qmlIntegration)
-        g_pAgent->authState.qmlIntegration->setError(text);
+    session.errorText = text;
+    g_pAgent->enqueueError(text);
 }
 
 void CPolkitListener::showInfo(const QString& text) {
@@ -107,8 +120,6 @@ void CPolkitListener::finishAuth() {
 
     if (!session.gainedAuth && !session.cancelled) {
         std::print("> finishAuth: Did not gain auth. Reattempting.\n");
-        if (g_pAgent->authState.qmlIntegration)
-            g_pAgent->authState.qmlIntegration->blockInput(false);
         session.session->deleteLater();
         reattempt();
         return;
@@ -124,6 +135,11 @@ void CPolkitListener::finishAuth() {
     } else
         session.result->setCompleted();
 
+    if (session.gainedAuth)
+        g_pAgent->enqueueComplete("success");
+    else if (session.cancelled)
+        g_pAgent->enqueueComplete("cancelled");
+
     g_pAgent->resetAuthState();
 }
 
@@ -132,8 +148,6 @@ void CPolkitListener::submitPassword(const QString& pass) {
         return;
 
     session.session->setResponse(pass);
-    if (g_pAgent->authState.qmlIntegration)
-        g_pAgent->authState.qmlIntegration->blockInput(true);
 }
 
 void CPolkitListener::cancelPending() {

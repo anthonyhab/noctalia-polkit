@@ -1,12 +1,14 @@
 #define POLKIT_AGENT_I_KNOW_API_IS_SUBJECT_TO_CHANGE 1
 
-#include <polkitagent/polkitagent.h>
 #include <print>
-#include <QtCore/QString>
-using namespace Qt::Literals::StringLiterals;
+#include <QJsonDocument>
+#include <QStandardPaths>
+#ifdef signals
+#undef signals
+#endif
+#include <polkitagent/polkitagent.h>
 
 #include "Agent.hpp"
-#include "../QMLIntegration.hpp"
 
 CAgent::CAgent() {
     ;
@@ -16,17 +18,15 @@ CAgent::~CAgent() {
     ;
 }
 
-bool CAgent::start() {
+bool CAgent::start(QCoreApplication& app, const QString& socketPath) {
     sessionSubject = makeShared<PolkitQt1::UnixSessionSubject>(getpid());
 
     listener.registerListener(*sessionSubject, "/org/hyprland/PolicyKit1/AuthenticationAgent");
 
-    int          argc = 1;
-    char*        argv = (char*)"hyprpolkitagent";
-    QApplication app(argc, &argv);
-
     app.setApplicationName("Hyprland Polkit Agent");
-    QGuiApplication::setQuitOnLastWindowClosed(false);
+
+    ipcSocketPath = socketPath;
+    setupIpcServer();
 
     app.exec();
 
@@ -36,14 +36,6 @@ bool CAgent::start() {
 void CAgent::resetAuthState() {
     if (authState.authing) {
         authState.authing = false;
-
-        if (authState.qmlEngine)
-            authState.qmlEngine->deleteLater();
-        if (authState.qmlIntegration)
-            authState.qmlIntegration->deleteLater();
-
-        authState.qmlEngine      = nullptr;
-        authState.qmlIntegration = nullptr;
     }
 }
 
@@ -51,40 +43,147 @@ void CAgent::initAuthPrompt() {
     resetAuthState();
 
     if (!listener.session.inProgress) {
-        std::print(stderr, "INTERNAL ERROR: Spawning qml prompt but session isn't in progress\n");
+        std::print(stderr, "INTERNAL ERROR: Auth prompt requested but session isn't in progress\n");
         return;
     }
 
-    std::print("Spawning qml prompt\n");
+    std::print("Auth prompt requested\n");
 
     authState.authing = true;
-
-    authState.qmlIntegration = new CQMLIntegration();
-
-    if (qEnvironmentVariableIsEmpty("QT_QUICK_CONTROLS_STYLE"))
-        QQuickStyle::setStyle("org.hyprland.style");
-
-    authState.qmlEngine = new QQmlApplicationEngine();
-    authState.qmlEngine->rootContext()->setContextProperty("hpa", authState.qmlIntegration);
-    authState.qmlEngine->load(QUrl{u"qrc:/qt/qml/hpa/qml/main.qml"_s});
-
-    authState.qmlIntegration->focusField();
+    // The actual request is emitted when the session provides a prompt.
 }
 
-bool CAgent::resultReady() {
-    return !lastAuthResult.used;
+void CAgent::enqueueEvent(const QJsonObject& event) {
+    eventQueue.enqueue(event);
 }
 
-void CAgent::submitResultThreadSafe(const std::string& result) {
-    lastAuthResult.used   = false;
-    lastAuthResult.result = result;
+QJsonObject CAgent::buildRequestEvent() const {
+    QJsonObject event;
+    event["type"] = "request";
+    event["id"] = listener.session.cookie;
+    event["actionId"] = listener.session.actionId;
+    event["message"] = listener.session.message;
+    event["icon"] = listener.session.iconName;
+    event["user"] = listener.session.selectedUser.toString();
+    event["prompt"] = listener.session.prompt;
+    event["echo"] = listener.session.echoOn;
 
-    const bool PASS = result.starts_with("auth:");
+    QJsonObject details;
+    const auto keys = listener.session.details.keys();
+    for (const auto& key : keys) {
+        details.insert(key, listener.session.details.lookup(key));
+    }
+    event["details"] = details;
 
-    std::print("Got result from qml: {}\n", PASS ? "auth:**PASSWORD**" : result);
+    if (!listener.session.errorText.isEmpty())
+        event["error"] = listener.session.errorText;
 
-    if (PASS)
-        listener.submitPassword(result.substr(result.find(":") + 1).c_str());
-    else
-        listener.cancelPending();
+    return event;
+}
+
+void CAgent::enqueueRequest() {
+    enqueueEvent(buildRequestEvent());
+}
+
+void CAgent::enqueueError(const QString& error) {
+    QJsonObject event;
+    event["type"] = "update";
+    event["id"] = listener.session.cookie;
+    event["error"] = error;
+    enqueueEvent(event);
+}
+
+void CAgent::enqueueComplete(const QString& result) {
+    QJsonObject event;
+    event["type"] = "complete";
+    event["id"] = listener.session.cookie;
+    event["result"] = result;
+    enqueueEvent(event);
+}
+
+bool CAgent::handleRespond(const QString& cookie, const QString& password) {
+    if (!listener.session.inProgress || listener.session.cookie != cookie)
+        return false;
+    listener.submitPassword(password);
+    return true;
+}
+
+bool CAgent::handleCancel(const QString& cookie) {
+    if (!listener.session.inProgress || listener.session.cookie != cookie)
+        return false;
+    listener.cancelPending();
+    return true;
+}
+
+void CAgent::setupIpcServer() {
+    if (ipcSocketPath.isEmpty()) {
+        const auto runtimeDir = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+        ipcSocketPath = runtimeDir + "/noctalia-polkit-agent.sock";
+    }
+
+    QLocalServer::removeServer(ipcSocketPath);
+
+    ipcServer = new QLocalServer();
+    ipcServer->setSocketOptions(QLocalServer::UserAccessOption);
+
+    QObject::connect(ipcServer, &QLocalServer::newConnection, [this]() {
+        while (ipcServer->hasPendingConnections()) {
+            auto* socket = ipcServer->nextPendingConnection();
+            QObject::connect(socket, &QLocalSocket::readyRead, [this, socket]() {
+                const QByteArray data = socket->readAll();
+                handleSocket(socket, data);
+            });
+            QObject::connect(socket, &QLocalSocket::disconnected, socket, &QObject::deleteLater);
+        }
+    });
+
+    ipcServer->listen(ipcSocketPath);
+}
+
+void CAgent::handleSocket(QLocalSocket* socket, const QByteArray& data) {
+    const QList<QByteArray> lines = data.split('\n');
+    const QString command = QString::fromUtf8(lines.value(0)).trimmed();
+    const QString payload = QString::fromUtf8(lines.value(1)).trimmed();
+
+    if (command == "PING") {
+        socket->write("PONG\n");
+        socket->flush();
+        socket->disconnectFromServer();
+        return;
+    }
+
+    if (command == "NEXT") {
+        if (eventQueue.isEmpty()) {
+            socket->write("\n");
+        } else {
+            const auto event = eventQueue.dequeue();
+            const auto json = QJsonDocument(event).toJson(QJsonDocument::Compact);
+            socket->write(json + "\n");
+        }
+        socket->flush();
+        socket->disconnectFromServer();
+        return;
+    }
+
+    if (command.startsWith("RESPOND ")) {
+        const QString cookie = command.mid(QString("RESPOND ").length()).trimmed();
+        const bool ok = handleRespond(cookie, payload);
+        socket->write(ok ? "OK\n" : "ERROR\n");
+        socket->flush();
+        socket->disconnectFromServer();
+        return;
+    }
+
+    if (command.startsWith("CANCEL ")) {
+        const QString cookie = command.mid(QString("CANCEL ").length()).trimmed();
+        const bool ok = handleCancel(cookie);
+        socket->write(ok ? "OK\n" : "ERROR\n");
+        socket->flush();
+        socket->disconnectFromServer();
+        return;
+    }
+
+    socket->write("ERROR\n");
+    socket->flush();
+    socket->disconnectFromServer();
 }
