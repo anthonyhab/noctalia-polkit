@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QCoreApplication>
+#include <QDBusInterface>
 #include <QHash>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -52,8 +53,10 @@ class CAgent {
     QLocalServer*                     ipcServer = nullptr;
     QQueue<QJsonObject>               eventQueue;
     QString                           ipcSocketPath;
+    bool                              fingerprintAvailable = false;
 
     void        setupIpcServer();
+    bool        checkFingerprintAvailable();
     void        handleSocket(QLocalSocket* socket, const QByteArray& data);
     void        enqueueEvent(const QJsonObject& event);
     QJsonObject buildRequestEvent() const;

@@ -1,6 +1,9 @@
 #define POLKIT_AGENT_I_KNOW_API_IS_SUBJECT_TO_CHANGE 1
 
 #include <print>
+#include <QDBusConnection>
+#include <QDBusInterface>
+#include <QDBusReply>
 #include <QJsonDocument>
 #include <QStandardPaths>
 #ifdef signals
@@ -26,9 +29,52 @@ bool CAgent::start(QCoreApplication& app, const QString& socketPath) {
     app.setApplicationName("Noctalia Polkit Agent");
     ipcSocketPath = socketPath;
     setupIpcServer();
+
+    fingerprintAvailable = checkFingerprintAvailable();
+    if (fingerprintAvailable)
+        std::print("Fingerprint authentication available\n");
+
     app.exec();
 
     return true;
+}
+
+bool CAgent::checkFingerprintAvailable() {
+    // Check if fprintd is available and user has enrolled fingerprints
+    QDBusInterface manager("net.reactivated.Fprint",
+                           "/net/reactivated/Fprint/Manager",
+                           "net.reactivated.Fprint.Manager",
+                           QDBusConnection::systemBus());
+
+    if (!manager.isValid())
+        return false;
+
+    // Get the default fingerprint device
+    QDBusReply<QDBusObjectPath> deviceReply = manager.call("GetDefaultDevice");
+    if (!deviceReply.isValid())
+        return false;
+
+    QString devicePath = deviceReply.value().path();
+    if (devicePath.isEmpty())
+        return false;
+
+    // Check if current user has enrolled fingerprints on this device
+    QDBusInterface device("net.reactivated.Fprint",
+                          devicePath,
+                          "net.reactivated.Fprint.Device",
+                          QDBusConnection::systemBus());
+
+    if (!device.isValid())
+        return false;
+
+    // ListEnrolledFingers returns the list of enrolled fingers for a user
+    QString username = qgetenv("USER");
+    QDBusReply<QStringList> fingersReply = device.call("ListEnrolledFingers", username);
+
+    if (!fingersReply.isValid())
+        return false;
+
+    return !fingersReply.value().isEmpty();
 }
 
 void CAgent::resetAuthState() {
@@ -57,15 +103,16 @@ void CAgent::enqueueEvent(const QJsonObject& event) {
 
 QJsonObject CAgent::buildRequestEvent() const {
     QJsonObject event;
-    event["type"]     = "request";
-    event["source"]   = "polkit";
-    event["id"]       = listener.session.cookie;
-    event["actionId"] = listener.session.actionId;
-    event["message"]  = listener.session.message;
-    event["icon"]     = listener.session.iconName;
-    event["user"]     = listener.session.selectedUser.toString();
-    event["prompt"]   = listener.session.prompt;
-    event["echo"]     = listener.session.echoOn;
+    event["type"]                 = "request";
+    event["source"]               = "polkit";
+    event["id"]                   = listener.session.cookie;
+    event["actionId"]             = listener.session.actionId;
+    event["message"]              = listener.session.message;
+    event["icon"]                 = listener.session.iconName;
+    event["user"]                 = listener.session.selectedUser.toString();
+    event["prompt"]               = listener.session.prompt;
+    event["echo"]                 = listener.session.echoOn;
+    event["fingerprintAvailable"] = fingerprintAvailable;
 
     QJsonObject details;
     const auto  keys = listener.session.details.keys();
@@ -82,14 +129,15 @@ QJsonObject CAgent::buildRequestEvent() const {
 
 QJsonObject CAgent::buildKeyringRequestEvent(const KeyringRequest& req) const {
     QJsonObject event;
-    event["type"]        = "request";
-    event["source"]      = "keyring";
-    event["id"]          = req.cookie;
-    event["message"]     = req.title;
-    event["prompt"]      = req.message;
-    event["echo"]        = false;
-    event["passwordNew"] = req.passwordNew;
-    event["confirmOnly"] = req.confirmOnly;
+    event["type"]                 = "request";
+    event["source"]               = "keyring";
+    event["id"]                   = req.cookie;
+    event["message"]              = req.title;
+    event["prompt"]               = req.message;
+    event["echo"]                 = false;
+    event["passwordNew"]          = req.passwordNew;
+    event["confirmOnly"]          = req.confirmOnly;
+    event["fingerprintAvailable"] = fingerprintAvailable;
 
     if (!req.description.isEmpty())
         event["description"] = req.description;

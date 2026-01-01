@@ -8,7 +8,7 @@ project(hpa VERSION ${VER} LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Network)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Network DBus)
 find_package(PkgConfig REQUIRED)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_C_STANDARD 11)
@@ -41,7 +41,7 @@ qt_add_executable(noctaliapolkitagent
 )
 
 target_link_libraries(noctaliapolkitagent
-    PRIVATE Qt6::Core Qt6::Network PkgConfig::deps
+    PRIVATE Qt6::Core Qt6::Network Qt6::DBus PkgConfig::deps
 )
 
 # Keyring prompter (C executable)
