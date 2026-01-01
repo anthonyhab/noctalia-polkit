@@ -5,25 +5,11 @@ After=graphical-session.target
 ConditionEnvironment=WAYLAND_DISPLAY
 
 [Service]
+ExecStartPre=/bin/sh -c 'mkdir -p "$${XDG_DATA_HOME:-$$HOME/.local/share}/dbus-1/services" && cp -n @DATADIR@/noctalia-polkit/org.gnome.keyring.SystemPrompter.service "$${XDG_DATA_HOME:-$$HOME/.local/share}/dbus-1/services/"'
 ExecStart=@LIBEXECDIR@/noctalia-polkit
 Slice=session.slice
 TimeoutStopSec=5sec
 Restart=on-failure
-
-# Security hardening
-PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=%h/.local/share
-ReadWritePaths=%t
-NoNewPrivileges=true
-CapabilityBoundingSet=
-SystemCallFilter=@system-service
-SystemCallArchitectures=native
-RestrictRealtime=yes
-RestrictSUIDSGID=yes
-LockPersonality=yes
-MemoryDenyWriteExecute=true
 
 [Install]
 WantedBy=graphical-session.target

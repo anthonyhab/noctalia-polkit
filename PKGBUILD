@@ -3,7 +3,7 @@ pkgname=noctalia-polkit-git
 pkgver=r43.fc40397
 pkgrel=1
 pkgdesc="Polkit authentication agent and GNOME Keyring prompter for noctalia-shell"
-arch=('x86_64' 'aarch64')
+arch=('x86_64')
 url="https://github.com/anthonyhab/noctalia-polkit"
 license=('BSD-3-Clause')
 depends=(
@@ -17,21 +17,10 @@ makedepends=(
     'git'
     'cmake'
 )
-provides=(
-    "${pkgname%-git}"
-    'polkit-authentication-agent'
-)
-conflicts=(
-    "${pkgname%-git}"
-    'hyprpolkitagent'
-    'polkit-kde-agent'
-    'polkit-gnome'
-    'lxqt-policykit'
-    'mate-polkit'
-)
+provides=("${pkgname%-git}")
+conflicts=("${pkgname%-git}")
 source=("${pkgname}::git+https://github.com/anthonyhab/noctalia-polkit.git")
 sha256sums=('SKIP')
-install=noctalia-polkit.install
 
 pkgver() {
     cd "$pkgname"

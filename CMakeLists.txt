@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.22)
+cmake_minimum_required(VERSION 3.16)
 
 # Get version
 file(READ "${CMAKE_SOURCE_DIR}/VERSION" VER_RAW)
@@ -12,15 +12,6 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Core Network DBus)
 find_package(PkgConfig REQUIRED)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_C_STANDARD 11)
-
-# Security hardening flags
-if(NOT MSVC)
-    add_compile_options(-Wall -Wextra -Werror=format-security)
-    if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
-        add_compile_definitions(_FORTIFY_SOURCE=2)
-    endif()
-    add_link_options(-Wl,-z,relro -Wl,-z,now)
-endif()
 
 pkg_check_modules(
   deps
@@ -51,10 +42,6 @@ qt_add_executable(noctaliapolkitagent
 
 target_link_libraries(noctaliapolkitagent
     PRIVATE Qt6::Core Qt6::Network Qt6::DBus PkgConfig::deps
-)
-
-target_compile_definitions(noctaliapolkitagent PRIVATE
-    KEYRING_SERVICE_FILE_PATH="${CMAKE_INSTALL_FULL_DATADIR}/noctalia-polkit/org.gnome.keyring.SystemPrompter.service"
 )
 
 # Keyring prompter (C executable)
@@ -94,5 +81,3 @@ install(FILES ${CMAKE_BINARY_DIR}/noctalia-polkit-dbus.service
         RENAME org.noctalia.polkitagent.service)
 install(FILES ${CMAKE_BINARY_DIR}/org.gnome.keyring.SystemPrompter.service
         DESTINATION ${CMAKE_INSTALL_DATADIR}/noctalia-polkit)
-install(FILES assets/org.noctalia.polkitagent.conf
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/dbus-1/session.d)

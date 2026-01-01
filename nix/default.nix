@@ -3,6 +3,8 @@
   stdenv,
   cmake,
   pkg-config,
+  hyprutils,
+  hyprland-qt-support,
   kdePackages,
   polkit,
   qt6,
@@ -33,6 +35,8 @@ in
     ];
 
     buildInputs = [
+      hyprutils
+      hyprland-qt-support
       polkit
       kdePackages.polkit-qt-1
       qt6.qtbase

@@ -42,7 +42,6 @@ void CPolkitListener::initiateAuthentication(const QString& actionId, const QStr
     session.errorText    = "";
     session.echoOn       = false;
     session.requestSent  = false;
-    session.retryCount   = 0;
     session.details      = details;
     session.inProgress   = true;
 
@@ -120,32 +119,21 @@ void CPolkitListener::finishAuth() {
     }
 
     if (!session.gainedAuth && !session.cancelled) {
-        session.retryCount++;
-        if (session.retryCount < MAX_AUTH_RETRIES) {
-            std::print("> finishAuth: Did not gain auth. Reattempting ({}/{}).\n",
-                       session.retryCount, MAX_AUTH_RETRIES);
-            if (session.session) {
-                session.session->deleteLater();
-                session.session = nullptr;
-            }
-            reattempt();
-            return;
-        }
-        std::print("> finishAuth: Max retries reached, failing.\n");
-        session.cancelled = true; // Treat as cancelled to clean up properly
+        std::print("> finishAuth: Did not gain auth. Reattempting.\n");
+        session.session->deleteLater();
+        reattempt();
+        return;
     }
 
-    std::print("> finishAuth: Cleaning up session.\n");
+    std::print("> finishAuth: Gained auth, cleaning up.\n");
 
     session.inProgress = false;
 
     if (session.session) {
         session.session->result()->setCompleted();
         session.session->deleteLater();
-        session.session = nullptr;
-    } else if (session.result) {
+    } else
         session.result->setCompleted();
-    }
 
     if (session.gainedAuth)
         g_pAgent->enqueueComplete("success");

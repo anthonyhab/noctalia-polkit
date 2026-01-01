@@ -1,9 +1,0 @@
-post_install() {
-    echo ">>> Run: systemctl --user daemon-reload"
-    echo ">>> Run: systemctl --user enable --now noctalia-polkit.service"
-    echo ">>> Note: Requires noctalia-shell polkit plugin for UI"
-}
-
-post_upgrade() {
-    post_install
-}

@@ -2,15 +2,12 @@
 
 #include <QCoreApplication>
 #include <QDBusInterface>
-#include <QDir>
-#include <QFile>
 #include <QHash>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QQueue>
-#include <QStandardPaths>
 #include <QString>
 
 #include "PolkitListener.hpp"
@@ -59,7 +56,6 @@ class CAgent {
     bool                              fingerprintAvailable = false;
 
     void        setupIpcServer();
-    bool        setupKeyringServiceSymlink();
     bool        checkFingerprintAvailable();
     void        handleSocket(QLocalSocket* socket, const QByteArray& data);
     void        enqueueEvent(const QJsonObject& event);
