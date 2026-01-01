@@ -31,12 +31,15 @@ class CPolkitListener : public PolkitQt1::Agent::Listener {
     void showInfo(const QString& text);
 
   private:
+    static constexpr int MAX_AUTH_RETRIES = 3;
+
     struct {
         bool                           inProgress = false, cancelled = false, gainedAuth = false;
         QString                        cookie, message, iconName, actionId;
         QString                        prompt, errorText;
         bool                           echoOn = false;
         bool                           requestSent = false;
+        int                            retryCount = 0;
         PolkitQt1::Details             details;
         PolkitQt1::Agent::AsyncResult* result = nullptr;
         PolkitQt1::Identity            selectedUser;

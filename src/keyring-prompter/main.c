@@ -5,13 +5,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
-#include <errno.h>
 
 #include "noctalia-prompt.h"
 #include "ipc-client.h"
-
-#define FALLBACK_GCR_PROMPTER "/usr/lib/gcr-prompter"
 
 static GcrSystemPrompter *the_prompter = NULL;
 static GMainLoop *main_loop = NULL;
@@ -91,26 +87,6 @@ on_name_lost (GDBusConnection *connection,
     g_main_loop_quit (main_loop);
 }
 
-static void
-fallback_to_gcr_prompter (char *argv[])
-{
-    g_message ("Falling back to %s", FALLBACK_GCR_PROMPTER);
-
-    /* Check if fallback exists */
-    if (access (FALLBACK_GCR_PROMPTER, X_OK) != 0) {
-        g_warning ("Fallback %s not available: %s",
-                   FALLBACK_GCR_PROMPTER, g_strerror (errno));
-        exit (1);
-    }
-
-    /* Exec the original gcr-prompter, inheriting our argv */
-    execv (FALLBACK_GCR_PROMPTER, argv);
-
-    /* If exec returns, it failed */
-    g_warning ("Failed to exec %s: %s", FALLBACK_GCR_PROMPTER, g_strerror (errno));
-    exit (1);
-}
-
 int
 main (int argc, char *argv[])
 {
@@ -130,12 +106,11 @@ main (int argc, char *argv[])
 
     /* Check if noctalia-polkit socket is available */
     if (!noctalia_ipc_ping ()) {
-        g_message ("noctalia-polkit socket not available");
-        fallback_to_gcr_prompter (argv);
-        /* Not reached */
+        g_critical ("noctalia-polkit socket not available - is noctalia-polkit.service running?");
+        return 1;
     }
 
-    g_message ("noctalia-polkit socket is available, starting keyring prompter");
+    g_message ("Connected to noctalia-polkit, starting keyring prompter");
 
     /* Create system prompter with our custom prompt type */
     the_prompter = gcr_system_prompter_new (GCR_SYSTEM_PROMPTER_SINGLE,

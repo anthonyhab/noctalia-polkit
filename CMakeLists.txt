@@ -44,6 +44,10 @@ target_link_libraries(noctaliapolkitagent
     PRIVATE Qt6::Core Qt6::Network Qt6::DBus PkgConfig::deps
 )
 
+target_compile_definitions(noctaliapolkitagent PRIVATE
+    KEYRING_SERVICE_FILE_PATH="${CMAKE_INSTALL_FULL_DATADIR}/noctalia-polkit/org.gnome.keyring.SystemPrompter.service"
+)
+
 # Keyring prompter (C executable)
 add_executable(noctalia-keyring-prompter
     src/keyring-prompter/main.c

@@ -17,8 +17,18 @@ makedepends=(
     'git'
     'cmake'
 )
-provides=("${pkgname%-git}")
-conflicts=("${pkgname%-git}")
+provides=(
+    "${pkgname%-git}"
+    'polkit-authentication-agent'
+)
+conflicts=(
+    "${pkgname%-git}"
+    'hyprpolkitagent'
+    'polkit-kde-agent'
+    'polkit-gnome'
+    'lxqt-policykit'
+    'mate-polkit'
+)
 source=("${pkgname}::git+https://github.com/anthonyhab/noctalia-polkit.git")
 sha256sums=('SKIP')
 

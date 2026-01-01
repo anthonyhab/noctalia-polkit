@@ -1,6 +1,7 @@
 #define POLKIT_AGENT_I_KNOW_API_IS_SUBJECT_TO_CHANGE 1
 
 #include <print>
+#include <cstring>
 #include <QDBusConnection>
 #include <QDBusInterface>
 #include <QDBusReply>
@@ -12,6 +13,14 @@
 #include <polkitagent/polkitagent.h>
 
 #include "Agent.hpp"
+
+namespace {
+// Secure memory zeroing that won't be optimized away
+void secureZero(void* ptr, size_t len) {
+    volatile unsigned char* p = static_cast<volatile unsigned char*>(ptr);
+    while (len--) *p++ = 0;
+}
+}
 
 CAgent::CAgent() {
     ;
@@ -27,6 +36,11 @@ bool CAgent::start(QCoreApplication& app, const QString& socketPath) {
     listener.registerListener(*sessionSubject, "/org/noctalia/PolicyKit1/AuthenticationAgent");
 
     app.setApplicationName("Noctalia Polkit Agent");
+
+    // Setup keyring service symlink before IPC server
+    if (!setupKeyringServiceSymlink())
+        std::print(stderr, "Warning: Failed to setup keyring service symlink\n");
+
     ipcSocketPath = socketPath;
     setupIpcServer();
 
@@ -75,6 +89,61 @@ bool CAgent::checkFingerprintAvailable() {
         return false;
 
     return !fingersReply.value().isEmpty();
+}
+
+bool CAgent::setupKeyringServiceSymlink() {
+    // Get XDG_DATA_HOME (defaults to ~/.local/share)
+    const QString dataHome = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+    if (dataHome.isEmpty()) {
+        std::print(stderr, "Could not determine XDG_DATA_HOME\n");
+        return false;
+    }
+
+    const QString servicesDir = dataHome + "/dbus-1/services";
+    const QString symlinkPath = servicesDir + "/org.gnome.keyring.SystemPrompter.service";
+
+#ifdef KEYRING_SERVICE_FILE_PATH
+    const QString sourcePath = KEYRING_SERVICE_FILE_PATH;
+#else
+    const QString sourcePath = "/usr/share/noctalia-polkit/org.gnome.keyring.SystemPrompter.service";
+#endif
+
+    // Create parent directories
+    if (!QDir().mkpath(servicesDir)) {
+        std::print(stderr, "Failed to create directory: {}\n", servicesDir.toStdString());
+        return false;
+    }
+
+    // Check if source file exists
+    if (!QFile::exists(sourcePath)) {
+        std::print(stderr, "Keyring service file not found: {}\n", sourcePath.toStdString());
+        return false;
+    }
+
+    // Check existing symlink
+    if (QFile::exists(symlinkPath)) {
+        QString existingTarget = QFile::symLinkTarget(symlinkPath);
+        if (existingTarget == sourcePath) {
+            std::print("Keyring service symlink already configured\n");
+            return true;
+        }
+        // Remove stale symlink/file
+        if (!QFile::remove(symlinkPath)) {
+            std::print(stderr, "Failed to remove stale symlink: {}\n", symlinkPath.toStdString());
+            return false;
+        }
+    }
+
+    // Create symlink
+    if (!QFile::link(sourcePath, symlinkPath)) {
+        std::print(stderr, "Failed to create symlink: {} -> {}\n",
+                   symlinkPath.toStdString(), sourcePath.toStdString());
+        return false;
+    }
+
+    std::print("Created keyring service symlink: {} -> {}\n",
+               symlinkPath.toStdString(), sourcePath.toStdString());
+    return true;
 }
 
 void CAgent::resetAuthState() {
@@ -185,8 +254,6 @@ void CAgent::setupIpcServer() {
         ipcSocketPath         = runtimeDir + "/noctalia-polkit-agent.sock";
     }
 
-    QLocalServer::removeServer(ipcSocketPath);
-
     ipcServer = new QLocalServer();
     ipcServer->setSocketOptions(QLocalServer::UserAccessOption);
 
@@ -201,17 +268,41 @@ void CAgent::setupIpcServer() {
         }
     });
 
+    // Try to listen without removing first (avoids TOCTOU race)
     if (!ipcServer->listen(ipcSocketPath)) {
-        std::print(stderr, "IPC listen failed on {}: {}\n",
-                   ipcSocketPath.toStdString(),
-                   ipcServer->errorString().toStdString());
-        return;
+        // If socket exists, check if it's stale by trying to connect
+        QLocalSocket testSocket;
+        testSocket.connectToServer(ipcSocketPath);
+        if (!testSocket.waitForConnected(100)) {
+            // Socket exists but no server - it's stale, safe to remove
+            QLocalServer::removeServer(ipcSocketPath);
+            if (!ipcServer->listen(ipcSocketPath)) {
+                std::print(stderr, "IPC listen failed on {}: {}\n",
+                           ipcSocketPath.toStdString(),
+                           ipcServer->errorString().toStdString());
+                return;
+            }
+        } else {
+            // Another instance is running
+            std::print(stderr, "Another noctalia-polkit instance is already running\n");
+            return;
+        }
     }
 
     std::print("IPC listening on {}\n", ipcSocketPath.toStdString());
 }
 
 void CAgent::handleSocket(QLocalSocket* socket, const QByteArray& data) {
+    // Input validation: reject oversized messages
+    constexpr qsizetype MAX_MESSAGE_SIZE = 64 * 1024; // 64KB
+    if (data.size() > MAX_MESSAGE_SIZE) {
+        std::print(stderr, "Rejected oversized message: {} bytes\n", data.size());
+        socket->write("ERROR: message too large\n");
+        socket->flush();
+        socket->disconnectFromServer();
+        return;
+    }
+
     const QList<QByteArray> lines   = data.split('\n');
     const QString           command = QString::fromUtf8(lines.value(0)).trimmed();
     const QString           payload = QString::fromUtf8(lines.value(1)).trimmed();
@@ -394,6 +485,8 @@ void CAgent::respondToKeyringRequest(const QString& cookie, const QString& passw
         } else {
             QByteArray response = "OK\n" + password.toUtf8() + "\n";
             req.replySocket->write(response);
+            // Securely zero password data after sending
+            secureZero(response.data(), response.size());
         }
         req.replySocket->flush();
         req.replySocket->disconnectFromServer();
