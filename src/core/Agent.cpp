@@ -1,11 +1,14 @@
 #define POLKIT_AGENT_I_KNOW_API_IS_SUBJECT_TO_CHANGE 1
 
 #include <print>
+#include <cerrno>
 #include <cstring>
+#include <unistd.h>
 #include <QDBusConnection>
 #include <QDBusInterface>
 #include <QDBusReply>
 #include <QJsonDocument>
+#include <QFileInfo>
 #include <QStandardPaths>
 #ifdef signals
 #undef signals
@@ -120,25 +123,35 @@ bool CAgent::setupKeyringServiceSymlink() {
         return false;
     }
 
-    // Check existing symlink
-    if (QFile::exists(symlinkPath)) {
-        QString existingTarget = QFile::symLinkTarget(symlinkPath);
+    QFileInfo linkInfo(symlinkPath);
+    if (linkInfo.isSymLink()) {
+        QString existingTarget = linkInfo.symLinkTarget();
         if (existingTarget == sourcePath) {
             std::print("Keyring service symlink already configured\n");
             return true;
         }
-        // Remove stale symlink/file
         if (!QFile::remove(symlinkPath)) {
             std::print(stderr, "Failed to remove stale symlink: {}\n", symlinkPath.toStdString());
             return false;
         }
+    } else if (linkInfo.exists()) {
+        std::print("Keyring service file already present, leaving it in place\n");
+        return true;
     }
 
-    // Create symlink
-    if (!QFile::link(sourcePath, symlinkPath)) {
-        std::print(stderr, "Failed to create symlink: {} -> {}\n",
-                   symlinkPath.toStdString(), sourcePath.toStdString());
-        return false;
+    const QByteArray sourceBytes  = QFile::encodeName(sourcePath);
+    const QByteArray symlinkBytes = QFile::encodeName(symlinkPath);
+    if (::symlink(sourceBytes.constData(), symlinkBytes.constData()) != 0) {
+        std::print(stderr, "Failed to create symlink: {} -> {}: {}\n",
+                   symlinkPath.toStdString(),
+                   sourcePath.toStdString(),
+                   std::strerror(errno));
+        if (!QFile::copy(sourcePath, symlinkPath)) {
+            std::print(stderr, "Failed to copy service file to {}\n", symlinkPath.toStdString());
+            return false;
+        }
+        std::print("Copied keyring service file to {}\n", symlinkPath.toStdString());
+        return true;
     }
 
     std::print("Created keyring service symlink: {} -> {}\n",
